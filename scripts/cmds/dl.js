@@ -2,136 +2,88 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 
-module.exports = {
-  nix: {
-    name: "autodl",
-    author: "Christus dev AI / Nix Adapt",
-    version: "3.0.2",
-    description: "Auto-téléchargeur pour YouTube, Spotify, TikTok, Instagram, etc.",
-    usage: "autodl [on/off] ou envoyez simplement un lien",
-    admin: false,
-    vip: false,
-    category: "Media",
-    prefix: false,
-    aliases: ["dl"]
-  },
-
-  async onStart({ message, args, event, userId }) {
-    // Correction ici : On vérifie l'existence de event et body avec l'option de secours
-    const body = event?.body || message?.body || "";
-    const match = body.match(/https?:\/\/\S+/i);
-
-    if (args[0] === "on" || args[0] === "off") {
-      return message.reply(`✅ Auto-download configuré sur : ${args[0]}`);
-    }
-
-    if (match) {
-      return await downloadMedia(match[0], message);
-    } else if (args.length > 0 && !args[0].startsWith('http')) {
-       // Si l'utilisateur a écrit quelque chose qui n'est pas un lien
-       return message.reply("⚠️ Veuillez fournir un lien valide.");
-    }
-  },
-
-  async onChat({ message, event }) {
-    // On utilise la même sécurité pour le body ici
-    const body = event?.body || message?.body || "";
-    if (!body) return;
-
-    const match = body.match(/https?:\/\/\S+/i);
-    
-    if (match && isSupported(match[0])) {
-      await downloadMedia(match[0], message);
-    }
-  }
+const nix = {
+  name: "autodl",
+  author: "Christus dev AI / Nix Adapt",
+  version: "3.0.3",
+  description: "Auto-téléchargeur de médias (YT, TikTok, FB, etc.)",
+  usage: "Envoyez simplement un lien ou /autodl <lien>",
+  admin: false,
+  category: "Media",
+  prefix: false,
 };
 
-// --- Fonctions Utilitaires ---
-
-const supportedLinks = {
-  youtube: /(youtube\.com|youtu\.be)/i,
-  instagram: /(instagram\.com|instagr\.am)/i,
-  tiktok: /(tiktok\.com|vm\.tiktok\.com)/i,
-  facebook: /(facebook\.com|fb\.watch)/i,
-  spotify: /(spotify\.com|spotify\.link)/i
-};
-
-function isSupported(url) {
-  return Object.values(supportedLinks).some(r => r.test(url));
+// Fonction pour télécharger proprement le flux
+async function downloadFile(url, filepath) {
+  const response = await axios({
+    url,
+    method: "GET",
+    responseType: "stream",
+    timeout: 60000,
+  });
+  const writer = fs.createWriteStream(filepath);
+  response.data.pipe(writer);
+  return new Promise((resolve, reject) => {
+    writer.on("finish", resolve);
+    writer.on("error", reject);
+  });
 }
 
-function formatDuration(durationMs) {
-  if (!durationMs) return "N/A";
-  const totalSeconds = Math.floor(durationMs / 1000);
-  const min = Math.floor(totalSeconds / 60);
-  const sec = totalSeconds % 60;
-  return `${min}m ${sec}s`;
-}
-
-async function downloadMedia(url, message) {
-  if (!isSupported(url)) return;
+async function handleDownload(url, bot, chatId, message) {
+  const supportedRegex = /(facebook\.com|fb\.watch|instagram\.com|tiktok\.com|youtube\.com|youtu\.be|spotify\.com)/i;
+  if (!supportedRegex.test(url)) return;
 
   try {
     const apiUrl = `https://downvid.onrender.com/api/download?url=${encodeURIComponent(url)}`;
-    const res = await axios.get(apiUrl, { timeout: 60000 });
-    const data = res.data;
+    const { data } = await axios.get(apiUrl);
 
     if (!data || data.status !== "success") return;
 
-    // Extraction des URLs selon la structure de ton API
     const mediaData = data?.data?.data || {};
-    const videoUrl = data.video || mediaData.nowm || data.data?.video || null;
-    const audioUrl = data.audio || data.data?.audio || null;
+    const videoUrl = data.video || mediaData.nowm || data.data?.video;
+    const audioUrl = data.audio || data.data?.audio;
+    
+    const isSpotify = /spotify\.com/i.test(url);
+    const cacheFolder = path.join(__dirname, "tmp");
+    if (!fs.existsSync(cacheFolder)) fs.mkdirSync(cacheFolder);
 
-    const downloads = [];
-    let header = "📥 **Media Auto-DL**\n";
-
-    if (supportedLinks.spotify.test(url)) {
-      if (audioUrl) downloads.push({ url: audioUrl, type: "audio" });
-      header = "✅ **Spotify Audio** 🎧";
-    } else if (supportedLinks.youtube.test(url)) {
-      if (videoUrl) downloads.push({ url: videoUrl, type: "video" });
-      else if (audioUrl) downloads.push({ url: audioUrl, type: "audio" });
-      header = "✅ **YouTube Media** 🎬";
-    } else {
-      if (videoUrl) downloads.push({ url: videoUrl, type: "video" });
-      else if (audioUrl) downloads.push({ url: audioUrl, type: "audio" });
-      header = "✅ **Media Download** 🎬";
+    if (isSpotify && audioUrl) {
+      const audioPath = path.join(cacheFolder, `audio_${Date.now()}.mp3`);
+      await downloadFile(audioUrl, audioPath);
+      await bot.sendAudio(chatId, audioPath, { caption: `🎵 ${mediaData.title || "Spotify"}` });
+      fs.unlinkSync(audioPath);
+    } 
+    else if (videoUrl) {
+      const videoPath = path.join(cacheFolder, `video_${Date.now()}.mp4`);
+      await downloadFile(videoUrl, videoPath);
+      await bot.sendVideo(chatId, videoPath, { 
+        caption: `✅ **Titre :** ${mediaData.title || "Vidéo"}\n⏱️ **Durée :** ${data.duration || "N/A"}` 
+      });
+      fs.unlinkSync(videoPath);
     }
-
-    if (downloads.length === 0) return;
-
-    const title = mediaData.title || "Sans titre";
-    const duration = formatDuration(mediaData.duration_ms || data.duration);
-    const caption = `${header}\n\n📌 **Titre :** ${title}\n⏱️ **Durée :** ${duration}`;
-
-    const cacheDir = path.join(__dirname, "cache");
-    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
-
-    const streams = [];
-    const tempFiles = [];
-
-    for (const item of downloads) {
-      const ext = item.type === "audio" ? "mp3" : "mp4";
-      const tempPath = path.join(cacheDir, `dl_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`);
-      
-      const response = await axios.get(item.url, { responseType: "arraybuffer" });
-      fs.writeFileSync(tempPath, response.data);
-      streams.push(fs.createReadStream(tempPath));
-      tempFiles.push(tempPath);
-    }
-
-    await message.reply({
-      body: caption,
-      attachment: streams
-    });
-
-    // Nettoyage après envoi
-    setTimeout(() => {
-      tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
-    }, 5000);
-
   } catch (err) {
     console.error("Autodl Error:", err.message);
   }
+}
+
+async function onStart({ bot, message, chatId, args, event }) {
+  const body = event?.body || message?.text || "";
+  const match = body.match(/https?:\/\/\S+/i);
+
+  if (match) {
+    await handleDownload(match[0], bot, chatId, message);
+  } else {
+    message.reply("📌 Envoyez un lien valide pour le télécharger.");
   }
+}
+
+// Pour l'écoute automatique des messages dans le chat
+async function onChat({ bot, chatId, message, event }) {
+  const body = event?.body || message?.text || "";
+  const match = body.match(/https?:\/\/\S+/i);
+  if (match) {
+    await handleDownload(match[0], bot, chatId, message);
+  }
+}
+
+module.exports = { nix, onStart, onChat };
