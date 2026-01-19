@@ -1,97 +1,121 @@
 const axios = require("axios");
+const fs = require("fs-extra");
 const path = require("path");
-const fs = require("fs");
+
+/* ================= CONFIG ================= */
+
+const PIN_API = "https://egret-driving-cattle.ngrok-free.app/api/pin";
+const CACHE_DIR = path.join(__dirname, "cache", "pinterest");
+
+/* ================= NIX META ================= */
 
 const nix = {
   name: "pinterest",
-  version: "0.0.1",
+  version: "1.1.0",
   aliases: ["pin"],
-  description: "Search Pinterest for images and return specified number of results.",
-  author: "ArYAN",
-  cooldown: 20,
-  role: 0,
-  prefix: true,
+  description: "Search and download images from Pinterest",
+  author: "Christus",
+  prefix: false,
   category: "media",
-  guide: "Use: {pn} <search query> - <number of images>\nExample: {pn} cat - 10",
+  type: "anyone",
+  cooldown: 10,
+  guide: "{p}pinterest <query> -<count>\nExample: {p}pinterest cat -10",
 };
+
+/* ================= COMMAND ================= */
 
 async function onStart({ bot, message, msg, chatId, args }) {
   try {
-    const input = args.join(" ");
-    
-    if (!input.includes("-")) {
-      return message.reply(`❌ Please use the correct format:\n\n${nix.guide.replace("{pn}", nix.name)}`);
+    const input = args.join(" ").trim();
+
+    if (!input) {
+      return message.reply("❌ Please provide a search query.");
     }
 
-    const parts = input.split("-");
-    const query = parts[0].trim();
-    let count = parseInt(parts[1]?.trim()) || 6;
-    
+    /* ===== PARSE QUERY & COUNT ===== */
+
+    let query = input;
+    let count = 6;
+
+    const match = input.match(/(.+?)(?:\s*-\s*(\d+))?$/);
+    if (match) {
+      query = match[1].trim();
+      if (match[2]) count = parseInt(match[2], 10);
+    }
+
     if (count > 20) count = 20;
+    if (count < 1) count = 1;
 
-    const apiUrl = `http://65.109.80.126:20409/aryan/pinterest?search=${encodeURIComponent(query)}&count=${count}`;
-    const res = await axios.get(apiUrl);
-    const data = res.data?.data || [];
+    const waitMsg = await message.reply(
+      `📌 Searching Pinterest...\n━━━━━━━━━━━━━━━\n🔍 Query: ${query}\n🖼️ Images: ${count}`
+    );
 
-    if (data.length === 0) {
-      return message.reply(`❌ No images found for "${query}". Try a different search.`);
+    /* ===== API CALL ===== */
+
+    const { data } = await axios.get(
+      `${PIN_API}?query=${encodeURIComponent(query)}&num=${count}`
+    );
+
+    const urls = data?.results || [];
+
+    if (!urls.length) {
+      await bot.deleteMessage(chatId, waitMsg.message_id);
+      return message.reply(`❌ No images found for "${query}".`);
     }
 
-    const tempDir = path.join(__dirname, "cache", "pinterest_downloads");
-    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    /* ===== DOWNLOAD IMAGES ===== */
 
-    const imgPaths = [];
-    
-    for (let i = 0; i < Math.min(count, data.length); i++) {
+    await fs.ensureDir(CACHE_DIR);
+    const paths = [];
+
+    for (let i = 0; i < Math.min(count, urls.length); i++) {
       try {
-        const imgPath = path.join(tempDir, `${chatId}_${i + 1}.jpg`);
-        const imgResponse = await axios.get(data[i], {
-          responseType: "stream",
-        });
-        
-        const writer = fs.createWriteStream(imgPath);
-        imgResponse.data.pipe(writer);
+        const imgPath = path.join(
+          CACHE_DIR,
+          `${chatId}_${Date.now()}_${i}.jpg`
+        );
 
-        await new Promise((resolve, reject) => {
-          writer.on('finish', resolve);
-          writer.on('error', reject);
+        const res = await axios.get(urls[i], {
+          responseType: "arraybuffer",
         });
 
-        imgPaths.push(imgPath);
-      } catch (err) {}
+        await fs.writeFile(imgPath, res.data);
+        paths.push(imgPath);
+      } catch {}
     }
 
-    if (imgPaths.length === 0) {
-      return message.reply("❌ Failed to download any images. Try again later.");
+    if (!paths.length) {
+      await bot.deleteMessage(chatId, waitMsg.message_id);
+      return message.reply("❌ Failed to download images.");
     }
-    
-    const bodyMessage =
-      `✅ Here are ${imgPaths.length} images from Pinterest\n` +
-      `🔍 Query: ${query}\n` +
-      `🦈 Total Images Count: ${imgPaths.length}`;
 
-    const media = imgPaths.map(p => ({
-        type: 'photo',
-        media: fs.createReadStream(p)
+    /* ===== SEND MEDIA GROUP ===== */
+
+    const media = paths.map((p) => ({
+      type: "photo",
+      media: fs.createReadStream(p),
     }));
-    
+
+    await bot.deleteMessage(chatId, waitMsg.message_id);
+
     await bot.sendMediaGroup(chatId, media, {
-        reply_to_message_id: msg.message_id
+      reply_to_message_id: msg.message_id,
     });
 
-    await bot.sendMessage(chatId, bodyMessage, {
-        reply_to_message_id: msg.message_id
-    });
-    
-    await fs.promises.rm(tempDir, { recursive: true, force: true });
-    
-  } catch (error) {
-    console.error("Pinterest command error:", error.message);
-    return message.reply(`⚠️ An error occurred: ${error.message}`);
+    await bot.sendMessage(
+      chatId,
+      `📌 Pinterest Results\n━━━━━━━━━━━━━━━\n🔍 Query: ${query}\n🖼️ Images sent: ${media.length}`,
+      { reply_to_message_id: msg.message_id }
+    );
+
+    /* ===== CLEANUP ===== */
+
+    await fs.remove(CACHE_DIR);
+
+  } catch (err) {
+    console.error("Pinterest Error:", err);
+    return message.reply("⚠️ An error occurred while fetching Pinterest images.");
   }
 }
 
-module.exports = {
-  nix,
-  onStart,
-};
+module.exports = { nix, onStart };
