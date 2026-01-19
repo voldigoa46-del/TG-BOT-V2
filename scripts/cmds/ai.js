@@ -14,7 +14,7 @@ const TMP_DIR = path.join(__dirname, "cache");
 
 const nix = {
   name: "ai",
-  version: "3.0.0",
+  version: "3.0.1",
   aliases: ["shizu"],
   description: "Advanced AI (text, image, music, video, lyrics)",
   author: "Aryan Chauchan • fixed by Christus",
@@ -49,7 +49,7 @@ async function onStart({ bot, message, chatId, args, event }) {
   const input = args.join(" ").trim();
   const userId = event?.senderID || chatId;
 
-  if (!input && !message.reply_to_message?.photo) {
+  if (!input && !event?.attachments?.length && !event?.messageReply?.attachments?.length) {
     return message.reply("💬 Please provide a message or an image.");
   }
 
@@ -72,12 +72,20 @@ async function onStart({ bot, message, chatId, args, event }) {
     `🤖 AI is thinking...\n━━━━━━━━━━━━━━━\n📅 ${timestamp}`
   );
 
-  /* ===== IMAGE DETECTION ===== */
+  /* ===== IMAGE DETECTION (SAFE) ===== */
 
   let imageUrl = null;
 
-  if (message.photo?.length) {
-    imageUrl = message.photo[message.photo.length - 1].file_id;
+  // Image envoyée directement
+  if (event?.attachments?.length) {
+    const img = event.attachments.find(a => a.type === "photo");
+    if (img?.url) imageUrl = img.url;
+  }
+
+  // Image en réponse à un message
+  if (!imageUrl && event?.messageReply?.attachments?.length) {
+    const img = event.messageReply.attachments.find(a => a.type === "photo");
+    if (img?.url) imageUrl = img.url;
   }
 
   const createdFiles = [];
@@ -85,8 +93,8 @@ async function onStart({ bot, message, chatId, args, event }) {
   try {
     const res = await axios.post(API_ENDPOINT, {
       uid: userId,
-      message: input,
-      image_url: imageUrl,
+      message: input || "",
+      image_url: imageUrl || null,
     });
 
     const {
@@ -103,20 +111,20 @@ async function onStart({ bot, message, chatId, args, event }) {
 
     if (image_url) {
       const file = await download(image_url, "jpg");
-      attachments.push({ type: "photo", media: file });
+      attachments.push({ type: "photo", path: file });
       createdFiles.push(file);
     }
 
     if (music_data?.downloadUrl) {
       const file = await download(music_data.downloadUrl, "mp3");
-      attachments.push({ type: "audio", media: file });
+      attachments.push({ type: "audio", path: file });
       createdFiles.push(file);
     }
 
     if (video_data?.downloadUrl || shoti_data?.downloadUrl) {
       const url = video_data?.downloadUrl || shoti_data?.downloadUrl;
       const file = await download(url, "mp4");
-      attachments.push({ type: "video", media: file });
+      attachments.push({ type: "video", path: file });
       createdFiles.push(file);
     }
 
@@ -131,15 +139,15 @@ async function onStart({ bot, message, chatId, args, event }) {
     if (attachments.length) {
       for (const media of attachments) {
         if (media.type === "photo") {
-          await bot.sendPhoto(chatId, fs.createReadStream(media.media), {
+          await bot.sendPhoto(chatId, fs.createReadStream(media.path), {
             caption: text,
           });
         } else if (media.type === "audio") {
-          await bot.sendAudio(chatId, fs.createReadStream(media.media), {
+          await bot.sendAudio(chatId, fs.createReadStream(media.path), {
             caption: text,
           });
         } else {
-          await bot.sendVideo(chatId, fs.createReadStream(media.media), {
+          await bot.sendVideo(chatId, fs.createReadStream(media.path), {
             caption: text,
           });
         }
