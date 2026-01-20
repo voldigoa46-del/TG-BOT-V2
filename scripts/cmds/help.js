@@ -1,103 +1,109 @@
+const axios = require('axios');
+
 module.exports = {
   nix: {
     name: "help",
-    prefix: false,
+    aliases: ["menu", "aide", "h"],
+    version: "1.5.0",
+    author: "ArYAN (Nix Port)",
     role: 0,
-    category: "utility",
-    aliases: ["commands"],
-    author: "ArYAN",
-    version: "0.0.1",
+    category: "utilitaire",
+    description: "Affiche le menu d'aide avec votre photo de profil.",
+    guide: "{p}help [nom de commande]"
   },
 
-  async onStart({ message, args }) {
+  async onStart({ bot, msg, chatId, args }) {
+    const userId = msg.from.id;
+    const userName = msg.from.first_name;
+    const prefix = "/";
+
     if (!global.teamnix || !global.teamnix.cmds) {
-      return message.reply("Command collection is not available.");
+      return bot.sendMessage(chatId, "❌ Erreur : Système de commandes non chargé.");
     }
+
     const commands = global.teamnix.cmds;
 
-    // Si une commande spécifique est demandée
+    // --- LOGIQUE DE RÉCUPÉRATION DE L'AVATAR ---
+    let avatarUrl = null;
+    try {
+      const photos = await bot.getUserProfilePhotos(userId);
+      if (photos.total_count > 0) {
+        const fileId = photos.photos[0][0].file_id;
+        avatarUrl = await bot.getFileLink(fileId);
+      }
+    } catch (e) {
+      console.log("Erreur récupération avatar help");
+    }
+
+    // --- CAS 1 : AIDE DÉTAILLÉE POUR UNE COMMANDE ---
     if (args.length) {
       const query = args[0].toLowerCase();
       const cmd = [...commands.values()].find(
-        (c) =>
-          c.nix.name === query ||
-          (c.nix.aliases && c.nix.aliases.includes(query))
+        (c) => c.nix.name === query || (c.nix.aliases && c.nix.aliases.includes(query))
       );
-      if (!cmd) return message.reply(`No command called “${query}”.`);
+
+      if (!cmd) return bot.sendMessage(chatId, `❌ Commande "${query}" introuvable.`);
+
       const info = cmd.nix;
       const detail = `
 ╭─────────────────────◊
-│ ▸ Command: ${info.name}
-│ ▸ Aliases: ${
-        info.aliases?.length ? info.aliases.join(", ") : "None"
-      }
-│ ▸ Can use: ${
-        info.role === 2 ? "Admin Only" : info.role === 1 ? "VIP Only" : "All Users"
-      }
-│ ▸ Category: ${info.category?.toUpperCase() || "UNCATEGORIZED"}
-│ ▸ PrefixEnabled?: ${info.prefix === false ? "False" : "True"}
-│ ▸ Author: ${info.author || "Unknown"}
-│ ▸ Version: ${info.version || "N/A"}
+│ ▸ Commande : ${info.name}
+│ ▸ Alias : ${info.aliases?.length ? info.aliases.join(", ") : "Aucun"}
+│ ▸ Permission : ${info.role === 2 ? "Admin" : info.role === 1 ? "VIP" : "Tous"}
+│ ▸ Catégorie : ${info.category?.toUpperCase() || "AUTRES"}
+│ ▸ Version : ${info.version || "1.0"}
+│ ▸ Description : ${info.description || "Pas de description"}
 ╰─────────────────────◊
       `.trim();
-      return message.reply(detail);
+
+      if (avatarUrl) {
+        return bot.sendPhoto(chatId, avatarUrl, { caption: detail });
+      } else {
+        return bot.sendMessage(chatId, detail);
+      }
     }
 
-    // Sinon afficher la liste complète formatée par catégorie (avec le style demandé)
+    // --- CAS 2 : MENU GÉNÉRAL ---
     const cats = {};
     [...commands.values()]
-      .filter(
-        (command, index, self) =>
-          index === self.findIndex((c) => c.nix.name === command.nix.name)
+      .filter((command, index, self) =>
+        index === self.findIndex((c) => c.nix.name === command.nix.name)
       )
       .forEach((c) => {
-        const cat = c.nix.category || "UNCATEGORIZED";
+        const cat = c.nix.category || "Autres";
         if (!cats[cat]) cats[cat] = [];
         if (!cats[cat].includes(c.nix.name)) cats[cat].push(c.nix.name);
       });
 
-    // Exemple mapping catégories vers titres décorés + emoji, tu peux modifier à ta guise
     const catTitles = {
-      media: "𝗠𝗲𝗱𝗶𝗮",
-      utility: "𝗨𝘁𝗶𝗹𝗶𝘁𝘆",
-      info: "𝗜𝗻𝗳𝗼",
-      boxchat: "𝗕𝗼𝘅 𝗰𝗵𝗮𝘁",
-      owner: "𝗢𝘄𝗻𝗲𝗿",
-      ai: "𝗔𝗶",
-      image: "𝗜𝗺𝗮𝗴𝗲",
-      search: "𝗦𝗲𝗮𝗿𝗰𝗵",
-      support: "𝗦𝘂𝗽𝗽𝗼𝗿𝘁",
-      game: "𝗚𝗮𝗺𝗲",
+      media: "Média",
+      utility: "Utilitaire",
+      utilitaire: "Utilitaire",
+      game: "Jeux",
+      economy: "Économie",
+      économie: "Économie",
+      ai: "IA & Chat",
+      image: "Images",
+      system: "Système"
     };
 
-    let msg = "📜 𝗖𝗼𝗺𝗺𝗮𝗻𝗱 𝗟𝗶𝘀𝘁\n\n";
+    let menuMsg = `👋 Bonjour ${userName} !\nVoici la liste de mes capacités :\n\n`;
 
-    // Tri alphabétique des catégories
-    Object.keys(cats)
-      .sort()
-      .forEach((cat) => {
-        const title = catTitles[cat.toLowerCase()] || cat.toUpperCase();
-        msg += `╭─────『 ${title} 』\n`;
+    Object.keys(cats).sort().forEach((cat) => {
+      const title = catTitles[cat.toLowerCase()] || cat.toUpperCase();
+      menuMsg += `🍓 ${title}\n`;
+      menuMsg += `${cats[cat].sort().map(cmd => `✿ ${cmd}`).join("   ")}\n\n`;
+    });
 
-        // Ici tu peux mettre un emoji ✿ devant chaque commande comme demandé
-        cats[cat]
-          .sort()
-          .forEach((cmdName) => {
-            msg += `✿ ${cmdName}   `;
-          });
+    const totalCmds = [...new Set([...commands.values()].map(c => c.nix.name))].length;
+    menuMsg += `📊 Total : ${totalCmds} commandes\n`;
+    menuMsg += `🔧 Aide : ${prefix}help [commande]`;
 
-        msg += "\n╰──────────────\n\n";
-      });
-
-    msg += `
-╭──────────────◊
-│ » Total commands: ${[...new Set(commands.values())].length}
-│ » A Powerful Telegram bot
-│ » ۝𝐶𝐻𝑅𝐼𝑆𝑇𝑈𝑆
-╰──────────◊
-「 𝑉𝑜𝑖𝑑 𝐵𝑜𝑡 」
-    `.trim();
-
-    await message.reply(msg);
-  },
+    // Envoi final avec ou sans photo
+    if (avatarUrl) {
+      return bot.sendPhoto(chatId, avatarUrl, { caption: menuMsg });
+    } else {
+      return bot.sendMessage(chatId, menuMsg);
+    }
+  }
 };
