@@ -7,7 +7,7 @@ module.exports = {
     name: "midjourney",
     aliases: ["mj"],
     version: "1.0.0",
-    author: "Christus (Nix Port)",
+    author: "Christus",
     role: 0,
     category: "AI-Image",
     description: "Génère 4 images via Midjourney. Répondez avec U1-U4 pour choisir.",
